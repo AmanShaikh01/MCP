@@ -3,7 +3,7 @@
 1. Clone the repository
 
 ```js
-git clone https://github.com/AmanShaikh-04/AI-Database-Editor.git
+git clone https://github.com/AmanShaikh01/AI-Database-Editor.git
 ```
 
 2. Install the dependencies
@@ -49,7 +49,7 @@ git commit -m "your message"
 4. Add the remote repository
 
 ```js
-git remote add origin https://github.com/AmanShaikh-04/AI-Database-Editor.git
+git remote add origin https://github.com/AmanShaikh01/AI-Database-Editor.git
 ```
 
 5. Change the branch

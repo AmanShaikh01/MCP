@@ -86,11 +86,13 @@ def add_student(student_data: Dict[str, Any]) -> Union[Dict[str, Any], str]:
 def update_student(filters: Dict[str, Any], new_data: Dict[str, Any]) -> Union[List[Dict[str, Any]], str]:
     """Updates existing student record(s) based on filters."""
     try:
-        query = supabase.from_('students')
+        # Start the query chain with update()
+        query = supabase.from_('students').update(new_data)
+        # Chain filtering methods after update()
         for column, value in filters.items():
             query = query.eq(column, value)
         
-        response = query.update(new_data).execute()
+        response = query.execute()
         if response.data is None:
             return "Error: No data received from Supabase after update."
         return response.data
@@ -102,11 +104,13 @@ def update_student(filters: Dict[str, Any], new_data: Dict[str, Any]) -> Union[L
 def delete_student(filters: Dict[str, Any]) -> Union[List[Dict[str, Any]], str]:
     """Deletes student record(s) based on filters."""
     try:
-        query = supabase.from_('students')
+        # Start the query chain with delete()
+        query = supabase.from_('students').delete()
+        # Chain filtering methods after delete()
         for column, value in filters.items():
             query = query.eq(column, value)
         
-        response = query.delete().execute()
+        response = query.execute()
         if response.data is None:
             return "Error: No data received from Supabase after delete."
         return response.data

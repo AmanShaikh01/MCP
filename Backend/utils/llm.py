@@ -3,8 +3,6 @@ import json
 import re
 from dotenv import load_dotenv
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain.schema import BaseOutputParser
-from langchain.prompts import PromptTemplate
 from langchain_core.messages import HumanMessage
 from typing import List, Dict, Union, Any
 
@@ -14,8 +12,7 @@ from utils.db import (
     add_student, update_student, delete_student
 )
 
-# Load environment variables from .env file
-load_dotenv()
+# ... (QueryClassifier, get_database_schema_info, get_llm, clean_json_output functions remain the same) ...
 
 class QueryClassifier:
     """Classifies user queries into CRUD operations"""
@@ -47,7 +44,7 @@ class QueryClassifier:
                 return 'query'  # Default to query if unclear
         except Exception as e:
             print(f"Error in classify_query: {e}")
-            return 'query'  # Default fallback
+            return 'query'
 
 def get_database_schema_info():
     """
@@ -95,26 +92,9 @@ def clean_json_output(text: str) -> str:
     return text
 
 def handle_query_operation(user_query: str, llm) -> str:
-    """Handle database query operations"""
+    """Handle database query operations with a single LLM call."""
     try:
         db_info = get_database_schema_info()
-        
-        # First, determine what type of information the user wants
-        intent_prompt = f"""
-        Analyze this query and determine what specific information the user wants:
-        
-        Query: "{user_query}"
-        
-        Choose one of these response types:
-        - "count": User wants just a number/count (e.g., "how many", "count of")
-        - "list": User wants to see actual student records
-        - "summary": User wants aggregated information (e.g., average, statistics)
-        
-        Return only one word: count, list, or summary
-        """
-        
-        intent_response = llm.invoke([HumanMessage(content=intent_prompt)])
-        intent = intent_response.content.strip().lower()
         
         prompt = f"""
         Extract database filter conditions from this student query.
@@ -123,15 +103,10 @@ def handle_query_operation(user_query: str, llm) -> str:
         Available columns: {db_info['sample_columns']}
         
         IMPORTANT: Use exact department names from the list above.
-        For department queries, map common terms:
-        - "computer", "cs", "computer science" -> "Computer"
-        - "mechanical", "mech" -> "Mechanical"
-        - "electrical", "ee" -> "Electrical"
-        - etc.
+        Map common terms: "cs" -> "Computer", "mech" -> "Mechanical", etc.
         
         Common column mappings:
         - "gpa", "cgpa" -> "cgpa"
-        - "department" -> "department"
         - "name" -> "name"
         - "roll number" -> "roll_number"
         
@@ -139,10 +114,8 @@ def handle_query_operation(user_query: str, llm) -> str:
         
         Query: "{user_query}"
         
-        Return JSON format:
-        {{"filters": {{"column_name": {{"op": "operator", "value": "value"}}}}}}
-        
-        If no specific filters, return: {{"filters": {{}}}}
+        Return JSON format: {{"filters": {{"column_name": {{"op": "operator", "value": "value"}}}}}}
+        If no filters, return: {{"filters": {{}}}}
         """
         
         response = llm.invoke([HumanMessage(content=prompt)])
@@ -152,59 +125,30 @@ def handle_query_operation(user_query: str, llm) -> str:
             parsed = json.loads(cleaned_response)
             filters = parsed.get('filters', {})
             
-            if not filters:
-                # Return all students but format based on intent
-                students = get_students()
-                if isinstance(students, list) and students:
-                    if intent == "count":
-                        return f"Total number of students: {len(students)}"
-                    elif intent == "summary":
-                        return f"Total students: {len(students)}\nDepartments: {', '.join(db_info['departments'])}"
-                    else:  # list
-                        if len(students) > 5:
-                            return f"Found {len(students)} students. Here are the first 5:\n{json.dumps(students[:5], indent=2)}"
-                        else:
-                            return f"Found {len(students)} student(s):\n{json.dumps(students, indent=2)}"
-                return "No students found in database."
-            
-            result = dynamic_student_query(filters)
+            result = get_students() if not filters else dynamic_student_query(filters)
             
             if isinstance(result, str) and result.startswith("Error"):
-                return f"Database error: {result}"
+                return json.dumps({"error": result})
             
             if not result:
-                return "No students found matching your criteria."
+                return json.dumps({"message": "No students found matching your criteria."})
             
-            # Format response based on user intent
-            if intent == "count":
-                # Extract what they're counting from the query
-                if any(word in user_query.lower() for word in ["how many", "count", "number of"]):
-                    if "department" in filters or "computer" in user_query.lower():
-                        dept_name = filters.get('department', {}).get('value', 'Computer')
-                        return f"Number of students in {dept_name} department: {len(result)}"
-                    else:
-                        return f"Number of students matching criteria: {len(result)}"
-                        
-            elif intent == "summary":
-                # Provide summary statistics
-                if len(result) == 1:
-                    return f"Found 1 student:\n{json.dumps(result[0], indent=2)}"
-                else:
-                    avg_cgpa = sum(s.get('cgpa', 0) for s in result if s.get('cgpa')) / len([s for s in result if s.get('cgpa')])
-                    return f"Found {len(result)} students.\nAverage CGPA: {avg_cgpa:.2f}\nFirst student: {result[0].get('name', 'N/A')}"
-                    
-            else:  # list - show actual records
-                if len(result) > 5:
-                    return f"Found {len(result)} students. Here are the first 5:\n{json.dumps(result[:5], indent=2)}"
-                else:
-                    return f"Found {len(result)} student(s):\n{json.dumps(result, indent=2)}"
+            # Limit the data sent to the frontend
+            if len(result) > 5:
+                message = f"Found {len(result)} students. Showing the first 5."
+                return json.dumps({"message": message, "students": result[:5]})
+            else:
+                message = f"Found {len(result)} student(s)."
+                return json.dumps({"message": message, "students": result})
                 
         except json.JSONDecodeError as e:
-            return f"Error parsing query filters: {e}. Raw response: {cleaned_response}"
+            return json.dumps({"error": f"Error parsing query filters: {e}. Raw response: {cleaned_response}"})
             
     except Exception as e:
-        return f"Error processing query: {str(e)}"
+        return json.dumps({"error": f"Error processing query: {str(e)}"})
 
+# ... (handle_add_operation, handle_update_operation, handle_delete_operation remain the same as the previous step) ...
+# ... (run_llm_query remains the same as the previous step) ...
 def handle_add_operation(user_query: str, llm) -> str:
     """Handle add student operations"""
     try:
@@ -228,20 +172,20 @@ def handle_add_operation(user_query: str, llm) -> str:
             student_data = parsed.get('student_data', {})
             
             if not student_data or 'name' not in student_data or 'roll_number' not in student_data:
-                return "To add a student, I need at least their name and roll number. Please provide both."
+                return json.dumps({"error": "To add a student, I need at least their name and roll number. Please provide both."})
             
             result = add_student(student_data)
             
             if isinstance(result, str) and result.startswith("Error"):
-                return f"Error adding student: {result}"
+                return json.dumps({"error": result})
             
-            return f"Successfully added student: {result.get('name', 'N/A')} (Roll No: {result.get('roll_number', 'N/A')})"
+            return json.dumps({"message": f"Successfully added student: {result.get('name', 'N/A')} (Roll No: {result.get('roll_number', 'N/A')})"})
             
         except json.JSONDecodeError as e:
-            return f"Error parsing add data: {e}. Raw response: {cleaned_response}"
+            return json.dumps({"error": f"Error parsing add data: {e}. Raw response: {cleaned_response}"})
             
     except Exception as e:
-        return f"Error processing add request: {str(e)}"
+        return json.dumps({"error": f"Error processing add request: {str(e)}"})
 
 def handle_update_operation(user_query: str, llm) -> str:
     """Handle update student operations"""
@@ -267,23 +211,23 @@ def handle_update_operation(user_query: str, llm) -> str:
             new_data = parsed.get('new_data', {})
             
             if not filters or not new_data:
-                return "Please specify both which student to update and what data to change."
+                return json.dumps({"error": "Please specify both which student to update and what data to change."})
             
             result = update_student(filters, new_data)
             
             if isinstance(result, str) and result.startswith("Error"):
-                return f"Error updating student: {result}"
+                return json.dumps({"error": result})
             
             if not result:
-                return "No student found matching the criteria for update."
+                return json.dumps({"message": "No student found matching the criteria for update."})
             
-            return f"Successfully updated {len(result)} student(s)."
+            return json.dumps({"message": f"Successfully updated {len(result)} student(s)."})
             
         except json.JSONDecodeError as e:
-            return f"Error parsing update data: {e}. Raw response: {cleaned_response}"
+            return json.dumps({"error": f"Error parsing update data: {e}. Raw response: {cleaned_response}"})
             
     except Exception as e:
-        return f"Error processing update request: {str(e)}"
+        return json.dumps({"error": f"Error processing update request: {str(e)}"})
 
 def handle_delete_operation(user_query: str, llm) -> str:
     """Handle delete student operations"""
@@ -308,46 +252,48 @@ def handle_delete_operation(user_query: str, llm) -> str:
             filters = parsed.get('filters', {})
             
             if not filters:
-                return "Please specify which student to delete using roll number or email."
+                return json.dumps({"error": "Please specify which student to delete using roll number or email."})
             
             result = delete_student(filters)
             
             if isinstance(result, str) and result.startswith("Error"):
-                return f"Error deleting student: {result}"
+                return json.dumps({"error": result})
             
             if not result:
-                return "No student found matching the criteria for deletion."
+                return json.dumps({"message": "No student found matching the criteria for deletion."})
             
-            return f"Successfully deleted {len(result)} student(s)."
+            return json.dumps({"message": f"Successfully deleted {len(result)} student(s)."})
             
         except json.JSONDecodeError as e:
-            return f"Error parsing delete filters: {e}. Raw response: {cleaned_response}"
+            return json.dumps({"error": f"Error parsing delete filters: {e}. Raw response: {cleaned_response}"})
             
     except Exception as e:
-        return f"Error processing delete request: {str(e)}"
+        return json.dumps({"error": f"Error processing delete request: {str(e)}"})
 
 def run_llm_query(user_query: str) -> str:
     """
     Main function to process user queries using LLM without complex agents
     """
+    greetings = ["hi", "hello", "hey", "good morning", "good afternoon", "good evening"]
+    if user_query.lower().strip() in greetings:
+        return json.dumps({"message": "Hello! How can I help you with the student database today?"})
+
     try:
         llm = get_llm()
         classifier = QueryClassifier(llm)
         
-        # Classify the query
         operation = classifier.classify_query(user_query)
         print(f"DEBUG: Classified operation: {operation}")
         
-        # Route to appropriate handler
         if operation == 'add':
             return handle_add_operation(user_query, llm)
         elif operation == 'update':
             return handle_update_operation(user_query, llm)
         elif operation == 'delete':
             return handle_delete_operation(user_query, llm)
-        else:  # Default to query
+        else:
             return handle_query_operation(user_query, llm)
             
     except Exception as e:
         print(f"Error in run_llm_query: {str(e)}")
-        return f"Error processing your request: {str(e)}. Please try again or rephrase your query."
+        return json.dumps({"error": f"Error processing your request: {str(e)}. Please try again or rephrase your query."})

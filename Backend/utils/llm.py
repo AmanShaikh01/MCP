@@ -302,13 +302,12 @@ import os
 import traceback
 from dotenv import load_dotenv
 
-from langchain_community.agent_toolkits import create_sql_agent, SQLDatabaseToolkit
+from langchain_community.agent_toolkits import SQLDatabaseToolkit
 from langchain_community.utilities import SQLDatabase
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_google_vertexai import ChatVertexAI
 from pymongo import MongoClient
 
-# Corrected imports for MongoDB using the correct class name
 from langchain_mongodb.agent_toolkit import MongoDBDatabaseToolkit
 from langchain.agents import create_tool_calling_agent, AgentExecutor
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
@@ -320,7 +319,7 @@ def get_llm(use_vertex=False):
     """Returns a configured LLM instance, switching between standard and Vertex AI."""
     if use_vertex:
         return ChatVertexAI(
-            model_name="gemini-1.5-flash-001",
+            model_name="gemini-2.0-flash-exp",
             temperature=0,
             project=os.getenv("GOOGLE_CLOUD_PROJECT")
         )
@@ -329,7 +328,7 @@ def get_llm(use_vertex=False):
         if not api_key:
             raise ValueError("GEMINI_API_KEY must be set in environment variables or .env file")
         return ChatGoogleGenerativeAI(
-            model="gemini-1.5-flash",
+            model="gemini-2.0-flash-exp",
             google_api_key=api_key,
             temperature=0,
             convert_system_message_to_human=True
@@ -344,34 +343,49 @@ def run_llm_query(user_query: str, db_uri: str, db_type: str, mode: str, session
         if db_type in ['postgresql', 'mysql']:
             # Create SQL Database connection
             db = SQLDatabase.from_uri(db_uri)
+            
+            # Create the toolkit and get the tools
             toolkit = SQLDatabaseToolkit(db=db, llm=llm)
-            
-            # Custom prompt suffix based on mode
-            custom_prompt_suffix = ""
+            tools = toolkit.get_tools()
+
+            # System prompt with mode-specific instructions
             if mode == 'read-only':
-                custom_prompt_suffix = (
-                    "\n\nIMPORTANT CONSTRAINTS:\n"
-                    "- You are in READ-ONLY MODE\n"
-                    "- You MUST NOT execute any INSERT, UPDATE, DELETE, DROP, ALTER, CREATE, or TRUNCATE statements\n"
-                    "- Only SELECT queries are permitted\n"
-                    "- If the user asks to modify data, politely inform them that you're in read-only mode\n"
+                system_prompt = (
+                    "You are a helpful AI assistant for querying a SQL database.\n"
+                    "You have access to tools to interact with the database.\n\n"
+                    "IMPORTANT CONSTRAINTS:\n"
+                    "- You are in READ-ONLY MODE.\n"
+                    "- You MUST NOT execute any INSERT, UPDATE, DELETE, DROP, ALTER, CREATE, or TRUNCATE statements.\n"
+                    "- Only SELECT queries are permitted.\n"
+                    "- If the user asks to modify data, politely inform them that you're in read-only mode.\n"
+                    "- Given a user's question, decide which tool to use and provide a clear answer."
                 )
-            else:
-                custom_prompt_suffix = (
-                    "\n\nIMPORTANT:\n"
-                    "- You are in READ-WRITE MODE\n"
-                    "- You can execute INSERT, UPDATE, DELETE queries when requested\n"
-                    "- Always confirm the action before executing destructive operations\n"
-                    "- Be cautious with UPDATE and DELETE queries - always use WHERE clauses appropriately\n"
+            else: # read-write mode
+                system_prompt = (
+                    "You are a helpful AI assistant for querying and managing a SQL database.\n"
+                    "You have access to tools to interact with the database.\n\n"
+                    "IMPORTANT:\n"
+                    "- You are in READ-WRITE MODE.\n"
+                    "- You can execute INSERT, UPDATE, DELETE queries when requested.\n"
+                    "- Always confirm the action before executing destructive operations.\n"
+                    "- Be cautious with UPDATE and DELETE queries - always use WHERE clauses appropriately.\n"
+                    "- Given a user's question, decide which tool to use and provide a clear answer."
                 )
             
-            # Create SQL agent with enhanced configuration
-            agent_executor = create_sql_agent(
-                llm=llm,
-                toolkit=toolkit,
+            # Create prompt template
+            prompt = ChatPromptTemplate.from_messages([
+                ("system", system_prompt),
+                MessagesPlaceholder(variable_name="chat_history", optional=True),
+                ("user", "{input}"),
+                MessagesPlaceholder(variable_name="agent_scratchpad"),
+            ])
+
+            # Create agent and executor
+            agent = create_tool_calling_agent(llm, tools, prompt)
+            agent_executor = AgentExecutor(
+                agent=agent, 
+                tools=tools, 
                 verbose=True,
-                agent_type="openai-tools",
-                suffix=custom_prompt_suffix,
                 max_iterations=10,
                 max_execution_time=30,
                 early_stopping_method="generate"
@@ -444,7 +458,6 @@ def run_llm_query(user_query: str, db_uri: str, db_type: str, mode: str, session
         final_answer = response.get('output', 'No answer found.')
         
         # Log to history if in read-write mode and a write operation was performed
-        # (This is a simplified version - in production, you'd detect actual write operations)
         if mode == 'read-write' and any(keyword in user_query.lower() for keyword in ['insert', 'update', 'delete', 'create', 'drop', 'alter']):
             if 'history' not in session:
                 session['history'] = []

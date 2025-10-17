@@ -300,12 +300,12 @@
 
 import os
 import traceback
+from datetime import datetime
 from dotenv import load_dotenv
 
 from langchain_community.agent_toolkits import SQLDatabaseToolkit
 from langchain_community.utilities import SQLDatabase
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_google_vertexai import ChatVertexAI
+from langchain_openai import ChatOpenAI
 from pymongo import MongoClient
 
 from langchain_mongodb.agent_toolkit import MongoDBDatabaseToolkit
@@ -316,39 +316,66 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 load_dotenv()
 
 def get_llm(use_vertex=False):
-    """Returns a configured LLM instance, switching between standard and Vertex AI."""
-    if use_vertex:
-        return ChatVertexAI(
-            model_name="gemini-2.0-flash-exp",
-            temperature=0,
-            project=os.getenv("GOOGLE_CLOUD_PROJECT")
+    """Returns a configured LLM instance using GROQ (FREE with tool calling support)."""
+    api_key = os.getenv("GROQ_API_KEY")
+    if not api_key:
+        raise ValueError(
+            "GROQ_API_KEY must be set in environment variables or .env file.\n"
+            "Get your FREE API key at: https://console.groq.com/keys"
         )
-    else:
-        api_key = os.getenv("GEMINI_API_KEY")
-        if not api_key:
-            raise ValueError("GEMINI_API_KEY must be set in environment variables or .env file")
-        return ChatGoogleGenerativeAI(
-            model="gemini-2.0-flash-exp",
-            google_api_key=api_key,
-            temperature=0,
-            convert_system_message_to_human=True
-        )
+    
+    # GROQ - FREE API with tool calling support
+    # Best models for tool calling:
+    # 1. "llama-3.3-70b-versatile" - RECOMMENDED: Latest, best performance
+    # 2. "llama-3.1-70b-versatile" - Alternative, very reliable
+    # 3. "mixtral-8x7b-32768" - Good for complex queries
+    
+    return ChatOpenAI(
+        model="llama-3.3-70b-versatile",  # FREE model with excellent tool calling
+        api_key=api_key,
+        base_url="https://api.groq.com/openai/v1",  # Groq endpoint
+        temperature=0,
+        model_kwargs={
+            "extra_headers": {
+                "HTTP-Referer": "http://localhost:3000",
+                "X-Title": "AI Database Editor"
+            }
+        }
+    )
+
+def validate_query_mode(query: str, mode: str) -> tuple[bool, str]:
+    """Validates if the query is allowed in the current mode."""
+    write_keywords = ['insert', 'update', 'delete', 'drop', 'alter', 'create', 'truncate']
+    query_lower = query.lower()
+    
+    if mode == 'read-only':
+        for keyword in write_keywords:
+            if keyword in query_lower:
+                return False, f"Cannot execute {keyword.upper()} operation in read-only mode."
+    
+    return True, ""
 
 def run_llm_query(user_query: str, db_uri: str, db_type: str, mode: str, session) -> dict:
     """Processes a user's query by routing it to the appropriate agent."""
     try:
-        llm = get_llm(use_vertex=False)
+        # Validate query mode
+        is_valid, error_msg = validate_query_mode(user_query, mode)
+        if not is_valid:
+            return {'error': error_msg}
+        
+        llm = get_llm()
         agent_executor = None
 
         if db_type in ['postgresql', 'mysql']:
-            # Create SQL Database connection
-            db = SQLDatabase.from_uri(db_uri)
+            # Initialize SQL Database
+            try:
+                db = SQLDatabase.from_uri(db_uri)
+            except Exception as e:
+                return {'error': f"Failed to connect to database: {str(e)}"}
             
-            # Create the toolkit and get the tools
             toolkit = SQLDatabaseToolkit(db=db, llm=llm)
             tools = toolkit.get_tools()
 
-            # System prompt with mode-specific instructions
             if mode == 'read-only':
                 system_prompt = (
                     "You are a helpful AI assistant for querying a SQL database.\n"
@@ -358,92 +385,101 @@ def run_llm_query(user_query: str, db_uri: str, db_type: str, mode: str, session
                     "- You MUST NOT execute any INSERT, UPDATE, DELETE, DROP, ALTER, CREATE, or TRUNCATE statements.\n"
                     "- Only SELECT queries are permitted.\n"
                     "- If the user asks to modify data, politely inform them that you're in read-only mode.\n"
-                    "- Given a user's question, decide which tool to use and provide a clear answer."
+                    "- First, explore the database schema to understand available tables.\n"
+                    "- Then write a SQL query to answer the user's question.\n"
+                    "- Always provide a clear, natural language answer based on the query results.\n"
+                    "- If you encounter an error, explain it clearly and suggest corrections."
                 )
-            else: # read-write mode
+            else:  # read-write mode
                 system_prompt = (
                     "You are a helpful AI assistant for querying and managing a SQL database.\n"
                     "You have access to tools to interact with the database.\n\n"
                     "IMPORTANT:\n"
                     "- You are in READ-WRITE MODE.\n"
                     "- You can execute INSERT, UPDATE, DELETE queries when requested.\n"
-                    "- Always confirm the action before executing destructive operations.\n"
-                    "- Be cautious with UPDATE and DELETE queries - always use WHERE clauses appropriately.\n"
-                    "- Given a user's question, decide which tool to use and provide a clear answer."
+                    "- For destructive operations (UPDATE, DELETE), first query the data to show what will be affected.\n"
+                    "- Always use WHERE clauses appropriately to avoid unintended modifications.\n"
+                    "- After write operations, verify the changes by querying the affected data.\n"
+                    "- First, explore the database schema to understand available tables.\n"
+                    "- Provide clear explanations of what you're doing and the results."
                 )
             
-            # Create prompt template
             prompt = ChatPromptTemplate.from_messages([
                 ("system", system_prompt),
                 MessagesPlaceholder(variable_name="chat_history", optional=True),
-                ("user", "{input}"),
+                ("human", "{input}"),
                 MessagesPlaceholder(variable_name="agent_scratchpad"),
             ])
 
-            # Create agent and executor
             agent = create_tool_calling_agent(llm, tools, prompt)
             agent_executor = AgentExecutor(
                 agent=agent, 
                 tools=tools, 
                 verbose=True,
-                max_iterations=10,
-                max_execution_time=30,
-                early_stopping_method="generate"
+                max_iterations=15,  # Increased for complex queries
+                max_execution_time=60,  # 60 second timeout
+                early_stopping_method="generate",
+                handle_parsing_errors=True  # Better error handling
             )
 
         elif db_type == 'mongodb':
-            # Create MongoDB connection
-            client = MongoClient(db_uri, serverSelectionTimeoutMS=5000)
+            try:
+                client = MongoClient(db_uri, serverSelectionTimeoutMS=5000)
+                # Test connection
+                client.admin.command('ping')
+            except Exception as e:
+                return {'error': f"Failed to connect to MongoDB: {str(e)}"}
             
             # Extract database name from URI
             db_name = db_uri.split('/')[-1].split('?')[0]
             if not db_name or db_name == '':
-                # Default to 'test' if no database specified
                 db_name = 'test'
             
             db = client[db_name]
 
-            # Create MongoDB toolkit
             toolkit = MongoDBDatabaseToolkit(db=db, llm=llm)
             tools = toolkit.get_tools()
 
-            # System prompt with mode-specific instructions
             if mode == 'read-only':
                 system_prompt = (
-                    "You are a helpful AI assistant for querying a MongoDB database. "
-                    "You have access to tools to interact with the database. "
-                    "IMPORTANT: You are in READ-ONLY MODE. "
-                    "You can only perform read operations (find, aggregate, count). "
-                    "You MUST NOT perform any write operations (insert, update, delete). "
-                    "If the user asks to modify data, politely inform them that you're in read-only mode. "
-                    "Given a user's question, decide which tool to use and provide a clear answer."
+                    "You are a helpful AI assistant for querying a MongoDB database.\n"
+                    "You have access to tools to interact with the database.\n\n"
+                    "IMPORTANT: You are in READ-ONLY MODE.\n"
+                    "- You can only perform read operations (find, aggregate, count).\n"
+                    "- You MUST NOT perform any write operations (insert, update, delete).\n"
+                    "- If the user asks to modify data, politely inform them that you're in read-only mode.\n"
+                    "- First, list available collections to understand the database structure.\n"
+                    "- Then query the data to answer the user's question.\n"
+                    "- Provide clear, natural language answers based on the query results."
                 )
             else:
                 system_prompt = (
-                    "You are a helpful AI assistant for querying and managing a MongoDB database. "
-                    "You have access to tools to interact with the database. "
-                    "You are in READ-WRITE MODE and can perform both read and write operations. "
-                    "Be cautious with write operations and confirm the action before executing. "
-                    "Given a user's question, decide which tool to use and provide a clear answer."
+                    "You are a helpful AI assistant for querying and managing a MongoDB database.\n"
+                    "You have access to tools to interact with the database.\n\n"
+                    "You are in READ-WRITE MODE and can perform both read and write operations.\n"
+                    "- For write operations, first show what data will be affected.\n"
+                    "- Be cautious with write operations and provide clear explanations.\n"
+                    "- After write operations, verify the changes.\n"
+                    "- First, list available collections to understand the database structure.\n"
+                    "- Provide clear explanations of what you're doing and the results."
                 )
             
-            # Create prompt template
             prompt = ChatPromptTemplate.from_messages([
                 ("system", system_prompt),
                 MessagesPlaceholder(variable_name="chat_history", optional=True),
-                ("user", "{input}"),
+                ("human", "{input}"),
                 MessagesPlaceholder(variable_name="agent_scratchpad"),
             ])
 
-            # Create agent and executor
             agent = create_tool_calling_agent(llm, tools, prompt)
             agent_executor = AgentExecutor(
                 agent=agent, 
                 tools=tools, 
                 verbose=True,
-                max_iterations=10,
-                max_execution_time=30,
-                early_stopping_method="generate"
+                max_iterations=15,
+                max_execution_time=60,
+                early_stopping_method="generate",
+                handle_parsing_errors=True
             )
 
         if not agent_executor:
@@ -452,26 +488,57 @@ def run_llm_query(user_query: str, db_uri: str, db_type: str, mode: str, session
         # Execute the query
         response = agent_executor.invoke({
             "input": user_query,
-            "chat_history": []  # Can be extended to include conversation history
+            "chat_history": []
         })
         
         final_answer = response.get('output', 'No answer found.')
         
-        # Log to history if in read-write mode and a write operation was performed
-        if mode == 'read-write' and any(keyword in user_query.lower() for keyword in ['insert', 'update', 'delete', 'create', 'drop', 'alter']):
-            if 'history' not in session:
-                session['history'] = []
-            
-            session['history'].append({
-                'query': user_query,
-                'description': f"Executed: {user_query[:100]}...",
-                'timestamp': str(os.times()),
-                'reverted': False
-            })
-            session.modified = True
+        # Track write operations in session history
+        if mode == 'read-write':
+            write_keywords = ['insert', 'update', 'delete', 'create', 'drop', 'alter']
+            if any(keyword in user_query.lower() for keyword in write_keywords):
+                if 'history' not in session:
+                    session['history'] = []
+                
+                session['history'].append({
+                    'query': user_query,
+                    'description': f"Executed: {user_query[:100]}{'...' if len(user_query) > 100 else ''}",
+                    'timestamp': datetime.now().isoformat(),  # Fixed timestamp
+                    'reverted': False
+                })
+                session.modified = True
         
         return {'response': final_answer}
 
     except Exception as e:
-        print(f"Error in run_llm_query: {traceback.format_exc()}")
-        return {'error': f"The AI agent encountered an error: {str(e)}. Please check your connection and query."}
+        error_trace = traceback.format_exc()
+        print(f"Error in run_llm_query: {error_trace}")
+        
+        # Provide more specific error messages
+        error_str = str(e)
+        if "404" in error_str and "tool" in error_str.lower():
+            return {
+                'error': "The model doesn't support tool calling. Please ensure you're using 'llama-3.3-70b-versatile' or another compatible model."
+            }
+        elif "authentication" in error_str.lower() or "api key" in error_str.lower() or "401" in error_str:
+            return {
+                'error': "Authentication failed. Please check your GROQ_API_KEY in the .env file. Get your free key at: https://console.groq.com/keys"
+            }
+        elif "connection" in error_str.lower() or "timeout" in error_str.lower():
+            return {
+                'error': f"Database connection failed: {error_str}. Please check your database URI and network connection."
+            }
+        elif "rate limit" in error_str.lower() or "429" in error_str:
+            return {
+                'error': (
+                    "Rate limit exceeded. Groq free tier limits:\n"
+                    "- 30 requests per minute\n"
+                    "- 14,400 requests per day\n"
+                    "- ~20,000-30,000 tokens per minute\n"
+                    "Please wait a moment and try again."
+                )
+            }
+        else:
+            return {
+                'error': f"An error occurred: {error_str}. Please check the console for details."
+            }

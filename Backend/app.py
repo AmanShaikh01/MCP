@@ -45,7 +45,7 @@ app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=2)
 app.config['SESSION_TYPE'] = 'filesystem'  # Can be changed to 'redis' for production
 
 # Enable CORS with credentials support
-CORS(app, 
+CORS(app,
      supports_credentials=True,
      origins=['http://localhost:3000', 'http://localhost:5173', 'http://127.0.0.1:3000', 'http://127.0.0.1:5173'],
      allow_headers=['Content-Type', 'Authorization'],
@@ -68,6 +68,7 @@ def root():
     return {
         'name': 'AI Database Assistant API',
         'version': '1.0.0',
+        'llm_provider': 'Groq (FREE)',
         'endpoints': {
             '/connect': 'POST - Connect to database',
             '/disconnect': 'POST - Disconnect from database',
@@ -90,14 +91,42 @@ def internal_error(error):
 # Run the Flask application
 if __name__ == '__main__':
     # Check for required environment variables
-    if not os.getenv('GEMINI_API_KEY'):
-        print("WARNING: GEMINI_API_KEY not found in environment variables!")
-        print("Please set it in your .env file or environment")
+    groq_key = os.getenv('GROQ_API_KEY')
     
+    if not groq_key:
+        print("=" * 60)
+        print("⚠️  WARNING: GROQ_API_KEY not found!")
+        print("=" * 60)
+        print("\n📋 Setup Instructions:")
+        print("1. Go to: https://console.groq.com/keys")
+        print("2. Sign up for FREE and create an API key")
+        print("3. Add to your .env file:")
+        print("   GROQ_API_KEY=your_api_key_here")
+        print("\n💡 Groq Free Tier Limits:")
+        print("   - 30 requests per minute")
+        print("   - 14,400 requests per day")
+        print("   - ~20,000-30,000 tokens per minute")
+        print("=" * 60)
+        print("\n⚠️  Server will start but API calls will fail without the key!\n")
+    else:
+        print("=" * 60)
+        print("✅ GROQ_API_KEY found!")
+        print("=" * 60)
+        print(f"🔑 API Key: {groq_key[:10]}...{groq_key[-4:]}")
+        print("🤖 Model: llama-3.3-70b-versatile (FREE)")
+        print("⚡ Tool Calling: Enabled")
+        print("=" * 60)
+        print()
+   
     # Run with debug mode for development
+    print("🚀 Starting AI Database Editor Server...")
+    print("📍 Server: http://127.0.0.1:5000")
+    print("📍 Frontend: http://localhost:3000")
+    print("\n💡 Press CTRL+C to quit\n")
+    
     app.run(
-        debug=True, 
-        host='0.0.0.0', 
+        debug=True,
+        host='0.0.0.0',
         port=5000,
         threaded=True
     )

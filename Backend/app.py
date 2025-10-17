@@ -100,7 +100,7 @@ app.config['SESSION_TYPE'] = 'filesystem'  # Can be changed to 'redis' for produ
 # )
 CORS(app,
      supports_credentials=True,
-     origins=['https://your-project-name.vercel.app'], # <-- IMPORTANT: Add your Vercel URL here
+     origins=['https://ai-database-editor.vercel.app/'], # <-- IMPORTANT: Add your Vercel URL here
      allow_headers=['Content-Type', 'Authorization'],
      methods=['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS']
 )

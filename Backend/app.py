@@ -24,25 +24,25 @@
 #     port = int(os.environ.get("PORT", 5000))
 #     app.run(debug=True, host='0.0.0.0', port=port)
 
-from flask import Flask
-from flask_cors import CORS
-from routes.query import query_bp
-import os
-from datetime import timedelta
+# from flask import Flask
+# from flask_cors import CORS
+# from routes.query import query_bp
+# import os
+# from datetime import timedelta
 
-# Create a Flask application instance
-app = Flask(__name__)
+# # Create a Flask application instance
+# app = Flask(__name__)
 
-# Set a secret key for session management. In a real production app,
-# this should be a long, random string stored securely as an environment variable.
-app.secret_key = os.getenv('FLASK_SECRET_KEY', os.urandom(24))
-
-# Configure session settings for better security and persistence
-app.config['SESSION_COOKIE_HTTPONLY'] = True
-app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
-app.config['SESSION_COOKIE_SECURE'] = False  # Set to True in production with HTTPS
-app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=2)
-app.config['SESSION_TYPE'] = 'filesystem'  # Can be changed to 'redis' for production
+# # Set a secret key for session management. In a real production app,
+# # this should be a long, random string stored securely as an environment variable.
+# app.secret_key = os.getenv('FLASK_SECRET_KEY', os.urandom(24))
+     
+# # Configure session settings for better security and persistence
+# app.config['SESSION_COOKIE_HTTPONLY'] = True
+# app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+# app.config['SESSION_COOKIE_SECURE'] = False  # Set to True in production with HTTPS
+# app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=2)
+# app.config['SESSION_TYPE'] = 'filesystem'  # Can be changed to 'redis' for production
 
 # Enable CORS with credentials support
 # from flask import Flask

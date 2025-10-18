@@ -631,7 +631,7 @@ import {
 } from "lucide-react";
 
 // IMPORTANT: Do not change the API URL or function names/values.
-const API_URL = "http://localhost:5000";
+const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
 
 // --- Custom Components for Modern UI ---
 

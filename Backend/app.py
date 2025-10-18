@@ -282,14 +282,16 @@ app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 app.config['SESSION_COOKIE_SECURE'] = False  # Set to True in production with HTTPS
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=2)
 
-# Configure CORS
+# NEW DYNAMIC CORS CONFIGURATION
+# This will read allowed URLs from an environment variable
+origins = os.getenv('CORS_ORIGINS', 'http://localhost:5173').split(',')
+
 CORS(app,
      supports_credentials=True,
-     origins=['https://ai-database-editor.vercel.app/'], # Your Vercel frontend URL
+     origins=origins,
      allow_headers=['Content-Type', 'Authorization'],
      methods=['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS']
 )
-
 
 # 2. Register Blueprints
 # ==================================================

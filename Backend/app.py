@@ -276,11 +276,20 @@ app = Flask(__name__)
 # Set a secret key for session management
 app.secret_key = os.getenv('FLASK_SECRET_KEY', os.urandom(24))
 
+# Backend/app.py - NEW & IMPROVED CONFIGURATION
+
 # Configure session cookie settings
 app.config['SESSION_COOKIE_HTTPONLY'] = True
-app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
-app.config['SESSION_COOKIE_SECURE'] = False  # Set to True in production with HTTPS
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=2)
+
+# Production-specific cookie settings for cross-domain sessions
+if os.getenv('RENDER'): # RENDER is an env var automatically set by Render.com
+    app.config['SESSION_COOKIE_SAMESITE'] = 'None'
+    app.config['SESSION_COOKIE_SECURE'] = True
+else:
+    # Development settings (for localhost)
+    app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+    app.config['SESSION_COOKIE_SECURE'] = False
 
 # NEW DYNAMIC CORS CONFIGURATION
 # This will read allowed URLs from an environment variable
